@@ -1,0 +1,8 @@
+overrides:
+  '@mui/x-data-grid-premium': link:../mui-x/packages/x-data-grid-premium/build
+  '@mui/x-data-grid-generator': link:../mui-x/packages/x-data-grid-generator/build
+  '@mui/x-license': link:../mui-x/packages/x-license/build
+  '@mui/x-data-grid': link:../mui-x/packages/x-data-grid/build
+  '@mui/x-data-grid-pro': link:../mui-x/packages/x-data-grid-pro/build
+  grid-test-merging: link:../grid-test-merging
+  '@base-ui-components/react': link:../base-ui/packages/react
