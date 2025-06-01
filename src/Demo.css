@@ -1,6 +1,7 @@
 /* functional */
 
 .virtual {
+  box-sizing: border-box;
   position: relative;
   border: 1px solid red;
   overflow: scroll;
