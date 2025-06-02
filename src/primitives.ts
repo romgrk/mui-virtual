@@ -1,14 +1,45 @@
+import { abs } from './math';
+
 export type float = number;
 export type integer = number;
 
 export type Position = { x: float; y: float };
 export namespace Position {
-  export const EMPTY = { x: NaN, y: NaN };
+  export const EMPTY = create(0, 0);
+  export function create(x: float, y: float) {
+    const point = { x: NaN, y: NaN };
+    point.x = x;
+    point.y = y;
+    return point;
+  }
+}
+
+export type Vector = { x: float; y: float };
+export namespace Vector {
+  export const EMPTY = create(0, 0);
+  export function create(x: float, y: float) {
+    const vector = { x: NaN, y: NaN };
+    vector.x = x;
+    vector.y = y;
+    return vector;
+  }
+  export function clone(v: Vector) {
+    return create(v.x, v.y);
+  }
+  export function getMainDimension(v: Vector) {
+    return abs(v.x) > abs(v.y) ? v.x : v.y;
+  }
 }
 
 export type Dimensions = { width: float; height: float };
 export namespace Dimensions {
-  export const EMPTY = { width: NaN, height: NaN };
+  export const EMPTY = create(0, 0);
+  export function create(width: float, height: float) {
+    const dimensions = { width: NaN, height: NaN };
+    dimensions.width = width;
+    dimensions.height = height;
+    return dimensions;
+  }
 }
 
 /** If we're trying to find a value at the start of a range or at the end of it. */
@@ -30,7 +61,7 @@ export namespace ScrollDirection {
       return ScrollDirection.NONE;
     }
     /* eslint-disable */
-    if (Math.abs(dy) >= Math.abs(dx)) {
+    if (abs(dy) >= abs(dx)) {
       if (dy > 0) {
         return ScrollDirection.DOWN;
       } else {
@@ -45,6 +76,11 @@ export namespace ScrollDirection {
     }
     /* eslint-enable */
   }
+}
+
+export enum WheelBehavior {
+  NATIVE,
+  CONTROLLED,
 }
 
 /**
@@ -77,7 +113,7 @@ export type Padding = {
   left: integer;
 };
 export namespace Padding {
-  export const DEFAULT = { top: 100, right: 100, bottom: 100, left: 100 };
+  export const DEFAULT = { top: 200, right: 100, bottom: 200, left: 100 };
 
   export function forDirection(
     direction: ScrollDirection,

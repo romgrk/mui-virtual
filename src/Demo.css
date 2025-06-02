@@ -29,23 +29,28 @@
 /* styling */
 
 .virtual--row {
+  background-color: #5e1b87;
   box-sizing: border-box;
   border: 1px solid rgba(255, 0, 0, 0.2);
   &:hover {
     background-color: rgba(255, 255, 255, 0.1);
   }
 }
+.virtual--column {
+  background-color: #968919;
+}
 
 .virtual--filler {
-  background-image: linear-gradient(
-    45deg,
-    transparent 45%,
-    rgba(255, 0, 0, 0.1) 45%,
-    rgba(255, 0, 0, 0.1) 50%,
-    transparent 50%,
-    transparent 95%,
-    rgba(255, 0, 0, 0.1) 95%,
-    rgba(255, 0, 0, 0.1) 100%
-  );
-  background-size: 20px 20px;
+  background-color: #204290;
+  /* background-image: linear-gradient( */
+  /*   45deg, */
+  /*   transparent 45%, */
+  /*   rgba(255, 0, 0, 0.1) 45%, */
+  /*   rgba(255, 0, 0, 0.1) 50%, */
+  /*   transparent 50%, */
+  /*   transparent 95%, */
+  /*   rgba(255, 0, 0, 0.1) 95%, */
+  /*   rgba(255, 0, 0, 0.1) 100% */
+  /* ); */
+  /* background-size: 20px 20px; */
 }

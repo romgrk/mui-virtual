@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { WheelBehavior } from './primitives';
 import { VirtualContainer } from './VirtualContainer';
 import './Demo.css';
 
@@ -16,6 +17,7 @@ export default function Demo() {
     }
 
     const virtual = new VirtualContainer({
+      behavior: WheelBehavior.CONTROLLED,
       rootNode: ref.current!,
       rowLength: options.length,
       columnLength: 100,
@@ -24,7 +26,7 @@ export default function Demo() {
       layout: {
         hasColumns: true,
       },
-      render: (row, column, node) => {
+      renderNode: (row, column, node) => {
         const option = options[row];
         const span = document.createElement('span');
         span.style.fontSize = '0.8em';

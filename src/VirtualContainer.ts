@@ -1,18 +1,18 @@
-import { floor, ceil, clamp } from './math';
+import { ceil, floor, clamp } from './math';
 import {
   float,
   integer,
-  Position,
   Dimensions,
   Padding,
+  Position,
   Context,
   Approach,
   ScrollDirection,
+  WheelBehavior,
   SwapArray,
+  Vector,
 } from './primitives';
 import { setImmediate } from './setImmediate';
-
-const TIME_ORIGIN = performance.timeOrigin;
 
 type Options = {
   rootNode: HTMLElement;
@@ -21,7 +21,8 @@ type Options = {
   rowHeight: number;
   columnWidth: number;
   layout?: Partial<VirtualContainer['layout']>;
-  render: (row: number, column: number, node: HTMLElement) => void;
+  behavior?: WheelBehavior;
+  renderNode: (row: number, column: number, node: HTMLElement) => void;
 };
 
 type RowEntry = {
@@ -50,6 +51,7 @@ const dom = {
 
 export class VirtualContainer {
   options: Options;
+  disposables: Set<Function>;
 
   rowLength: number;
   columnLength: number;
@@ -72,31 +74,30 @@ export class VirtualContainer {
     rendered: Dimensions;
   };
 
-  scrollTimestamp: integer;
-  /** High-precision timestamp */
-  scrollTimestampHP: float;
-  scrollPosition: Position;
-  scrollDirection: ScrollDirection;
-
-  ignoreNextScroll: boolean;
-  wheelDeltaY: float;
-  wheelDeltaX: float;
+  scroll: {
+    behavior: WheelBehavior;
+    position: Position;
+    maxPosition: Position;
+    direction: ScrollDirection;
+    timestamp: float;
+    deltaSinceLastRender: Vector;
+    ignoreNext: boolean;
+  };
 
   padding: Padding;
-  currentContext: Context;
+  context: Context;
 
   // PERF: find a better data structure
   renderedRows: Map<integer, RowEntry>;
 
-  render: (row: number, column: number, node: HTMLElement) => void;
+  renderNode: (row: number, column: number, node: HTMLElement) => void;
 
   tasks: SwapArray<Function>;
   tasksScheduled: boolean;
 
-  disposables: Set<Function>;
-
   constructor(options: Options) {
     this.options = options;
+    this.disposables = new Set();
 
     this.rowLength = options.rowLength;
     this.columnLength = options.columnLength;
@@ -122,30 +123,25 @@ export class VirtualContainer {
       rendered: Dimensions.EMPTY,
     };
 
-    this.scrollTimestamp = 0;
-    this.scrollTimestampHP = NaN;
-    this.scrollPosition = { ...Position.EMPTY };
-    this.scrollPosition.x = 0;
-    this.scrollPosition.y = 0;
-    this.scrollDirection = ScrollDirection.NONE;
-
-    this.ignoreNextScroll = false;
-    this.wheelDeltaX = NaN;
-    this.wheelDeltaX = 0;
-    this.wheelDeltaY = NaN;
-    this.wheelDeltaY = 0;
+    this.scroll = {
+      behavior: options.behavior ?? WheelBehavior.NATIVE,
+      position: Position.create(0, 0),
+      maxPosition: Position.create(0, 0),
+      direction: ScrollDirection.NONE,
+      timestamp: NaN,
+      deltaSinceLastRender: Vector.create(0, 0),
+      ignoreNext: false,
+    };
 
     this.padding = { ...Padding.DEFAULT };
-    this.currentContext = Context.EMPTY;
+    this.context = Context.EMPTY;
 
     this.renderedRows = new Map();
 
-    this.render = options.render;
+    this.renderNode = options.renderNode;
 
     this.tasks = new SwapArray();
     this.tasksScheduled = false;
-
-    this.disposables = new Set();
 
     this.setup();
   }
@@ -159,8 +155,10 @@ export class VirtualContainer {
   }
 
   attachEventHandlers() {
-    this.rootNode.addEventListener('wheel', this.onWheel);
     this.rootNode.addEventListener('scroll', this.onScroll);
+    if (this.scroll.behavior === WheelBehavior.CONTROLLED) {
+      this.rootNode.addEventListener('wheel', this.onWheel);
+    }
     this.disposables.add(() => {
       this.rootNode.removeEventListener('wheel', this.onWheel);
       this.rootNode.removeEventListener('scroll', this.onScroll);
@@ -168,7 +166,7 @@ export class VirtualContainer {
   }
 
   readDimensions() {
-    const { options, layout, dimensions } = this;
+    const { options, layout, dimensions, scroll } = this;
 
     dimensions.root = {
       width: this.rootNode.clientWidth,
@@ -195,6 +193,9 @@ export class VirtualContainer {
       width: options.columnWidth,
       height: layout.hasRows ? options.rowHeight : dimensions.root.height,
     };
+
+    scroll.maxPosition.x = dimensions.content.width - dimensions.root.width;
+    scroll.maxPosition.y = dimensions.content.height - dimensions.root.height;
   }
 
   writeDimensions() {
@@ -204,90 +205,79 @@ export class VirtualContainer {
   }
 
   onWheel = (event: WheelEvent) => {
-    performance.mark(`dy: ${event.deltaY}`);
-    // const dy = event.deltaY;
-    // console.log(dy, Math.abs(dy) > 40 ? 'prevent' : undefined, event);
-    // if (Math.abs(dy) > 40) {
-    //   event.preventDefault();
-    //   this.wheelDeltaY += dy;
-    //   this.onScroll(event);
-    //   this.ignoreNextScroll = true;
-    // }
+    const { scroll } = this;
+    // scroll.behavior === ScrollBehavior.CONTROLLED
+
+    const { deltaSinceLastRender } = scroll;
+
+    deltaSinceLastRender.x += event.deltaX;
+    deltaSinceLastRender.y += event.deltaY;
+
+    event.preventDefault();
+    scroll.ignoreNext = true;
+
+    scroll.position.x = clamp(
+      scroll.position.x + scroll.deltaSinceLastRender.x,
+      0,
+      scroll.maxPosition.x,
+    );
+    scroll.position.y = clamp(
+      scroll.position.y + scroll.deltaSinceLastRender.y,
+      0,
+      scroll.maxPosition.y,
+    );
+    this.render();
+    this.rootNode.scrollLeft = scroll.position.x;
+    this.rootNode.scrollTop = scroll.position.y;
   };
 
   onScroll = (event: Event) => {
-    if (this.ignoreNextScroll) {
-      this.ignoreNextScroll = false;
+    const { scroll } = this;
+
+    if (scroll.ignoreNext) {
+      scroll.ignoreNext = false;
       return;
     }
 
-    if (this.wheelDeltaY) {
-      this.rootNode.scrollTop += this.wheelDeltaY;
-      this.wheelDeltaY = 0;
-    }
-
-    const tPrevious = this.scrollTimestampHP;
-    const tNext = event.timeStamp;
-
-    const dt = tNext - tPrevious;
-
-    const xPrevious = this.scrollPosition.x;
-    const yPrevious = this.scrollPosition.y;
+    const xPrevious = scroll.position.x;
+    const yPrevious = scroll.position.y;
     const xNext = this.rootNode.scrollLeft;
     const yNext = this.rootNode.scrollTop;
+
+    scroll.position.x = xNext;
+    scroll.position.y = yNext;
 
     // TODO: clamp for scroll bounce
     const dx = xNext - xPrevious;
     const dy = yNext - yPrevious;
 
-    const ds = Math.abs(dx) > Math.abs(dy) ? dx : dy;
-    const scrollSpeed = dt === 0 ? 0 : ds / dt;
-    performance.mark(ds + 'px, ' + scrollSpeed.toPrecision(4) + 'px / ms');
-
-    this.scrollTimestamp = ~~(event.timeStamp - TIME_ORIGIN);
-    this.scrollTimestampHP = event.timeStamp;
+    scroll.timestamp = event.timeStamp;
 
     // PERF: don't change direction too fast for small diagonal deviations
-    this.scrollDirection = ScrollDirection.forDelta(dx, dy);
+    scroll.direction = ScrollDirection.forDelta(dx, dy);
 
-    this.scrollPosition.x = xNext;
-    this.scrollPosition.y = yNext;
+    this.padding = Padding.forDirection(scroll.direction, 800, false);
 
-    this.padding = Padding.forDirection(this.scrollDirection, 800, false);
+    this.render();
+  };
 
+  render = () => {
+    const { scroll } = this;
+    scroll.deltaSinceLastRender.x = 0;
+    scroll.deltaSinceLastRender.y = 0;
     this.writeNodes();
   };
 
-  getRowIndexAtY(y: float, approach: Approach) {
-    return clamp(
-      approach === Approach.FIRST
-        ? floor(y / this.dimensions.row.height)
-        : ceil(y / this.dimensions.row.height),
-      0,
-      this.rowLength,
-    );
-  }
-
-  getColumnIndexAtX(x: float, approach: Approach) {
-    return clamp(
-      approach === Approach.FIRST
-        ? floor(x / this.dimensions.column.width)
-        : ceil(x / this.dimensions.column.width),
-      0,
-      this.columnLength,
-    );
-  }
-
   writeNodes() {
-    const { layout, dimensions, padding, scrollPosition, renderedRows } = this;
+    const { layout, dimensions, padding, scroll, renderedRows } = this;
 
     const viewport = dimensions.viewport;
 
-    const yMin = scrollPosition.y - padding.top;
-    const yMax = scrollPosition.y + viewport.height + padding.bottom;
+    const yMin = scroll.position.y - padding.top;
+    const yMax = scroll.position.y + viewport.height + padding.bottom;
 
-    const xMin = scrollPosition.x - padding.left;
-    const xMax = scrollPosition.x + viewport.width + padding.right;
+    const xMin = scroll.position.x - padding.left;
+    const xMax = scroll.position.x + viewport.width + padding.right;
 
     // prettier-ignore
     const nextContext = {
@@ -331,7 +321,7 @@ export class VirtualContainer {
       }
 
       if (layout.hasColumns === false) {
-        this.render(r, 1, rowEntry.node);
+        this.renderNode(r, 1, rowEntry.node);
       } else {
         for (let c = nextContext.columnFirst; c < nextContext.columnLast; c += 1) {
           let columnEntry = rowEntry.columns.get(c);
@@ -350,7 +340,7 @@ export class VirtualContainer {
             column.style.height = dimensions.column.height + 'px';
             column.style.transform = 'translateX(' + x + 'px)';
 
-            this.render(r, c, column);
+            this.renderNode(r, c, column);
 
             rowEntry.node.appendChild(column);
           }
@@ -358,29 +348,39 @@ export class VirtualContainer {
       }
     }
 
-    performance.mark(renderedRows.size + ' rows, ' + newRowsCount + ' added');
-    performance.mark(ScrollDirection[this.scrollDirection]);
+    // performance.mark(
+    //   renderedRows.size +
+    //     ' rows, ' +
+    //     newRowsCount +
+    //     ' added, ' +
+    //     ScrollDirection[this.scroll.direction],
+    // );
 
-    this.currentContext = nextContext;
+    this.context = nextContext;
     this.scheduleWork(this.removeNodes);
   }
 
   removeNodes = () => {
-    const { renderedRows, rootNode, currentContext: context } = this;
+    let count = 0;
+
+    const { renderedRows, rootNode, context: context } = this;
 
     for (const [rowIndex, rowEntry] of renderedRows.entries()) {
       if (!isInInterval(rowIndex, context.rowFirst, context.rowLast)) {
         rootNode.removeChild(rowEntry.node);
         renderedRows.delete(rowIndex);
+        count++;
       } else {
         for (const [columnIndex, columnEntry] of rowEntry.columns.entries()) {
           if (!isInInterval(columnIndex, context.columnFirst, context.columnLast)) {
             rowEntry.node.removeChild(columnEntry.node);
             rowEntry.columns.delete(columnIndex);
+            count++;
           }
         }
       }
     }
+    // performance.mark(count + ' deleted nodes');
   };
 
   scheduleWork(task: Function) {
@@ -399,6 +399,26 @@ export class VirtualContainer {
     }
     tasks.length = 0;
   };
+
+  getRowIndexAtY(y: float, approach: Approach) {
+    return clamp(
+      approach === Approach.FIRST
+        ? floor(y / this.dimensions.row.height)
+        : ceil(y / this.dimensions.row.height),
+      0,
+      this.rowLength,
+    );
+  }
+
+  getColumnIndexAtX(x: float, approach: Approach) {
+    return clamp(
+      approach === Approach.FIRST
+        ? floor(x / this.dimensions.column.width)
+        : ceil(x / this.dimensions.column.width),
+      0,
+      this.columnLength,
+    );
+  }
 
   cleanup = () => {
     this.disposables.forEach((f) => f());
