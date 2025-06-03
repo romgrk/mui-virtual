@@ -42,15 +42,8 @@
 
 .virtual--filler {
   background-color: #204290;
-  /* background-image: linear-gradient( */
-  /*   45deg, */
-  /*   transparent 45%, */
-  /*   rgba(255, 0, 0, 0.1) 45%, */
-  /*   rgba(255, 0, 0, 0.1) 50%, */
-  /*   transparent 50%, */
-  /*   transparent 95%, */
-  /*   rgba(255, 0, 0, 0.1) 95%, */
-  /*   rgba(255, 0, 0, 0.1) 100% */
-  /* ); */
-  /* background-size: 20px 20px; */
+}
+
+.test-cell-small {
+  font-size: 0.8em;
 }

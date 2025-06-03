@@ -2,11 +2,12 @@ import { ceil, floor, clamp } from './math';
 import {
   float,
   integer,
+  Approach,
   Dimensions,
   Padding,
   Position,
   Context,
-  Approach,
+  Timestamp,
   ScrollDirection,
   WheelBehavior,
   SwapArray,
@@ -20,9 +21,11 @@ type Options = {
   columnLength: number;
   rowHeight: number;
   columnWidth: number;
-  layout?: Partial<VirtualContainer['layout']>;
-  behavior?: WheelBehavior;
+  layout?: Partial<Virtualizer['layout']>;
+  wheelBehavior?: WheelBehavior;
   renderNode: (row: number, column: number, node: HTMLElement) => void;
+  removeNode?: (row: number, column: number, node: HTMLElement) => void;
+  finishRender?: () => void;
 };
 
 type RowEntry = {
@@ -35,6 +38,7 @@ type ColumnEntry = {
 };
 
 const LAYOUT_DEFAULT = { hasColumns: true, hasRows: true };
+const SCROLL_DIRECTION_RESET = 500;
 
 const dom = {
   createRow: () => {
@@ -49,7 +53,7 @@ const dom = {
   },
 };
 
-export class VirtualContainer {
+export class Virtualizer {
   options: Options;
   disposables: Set<Function>;
 
@@ -75,13 +79,15 @@ export class VirtualContainer {
   };
 
   scroll: {
-    behavior: WheelBehavior;
+    wheelBehavior: WheelBehavior;
     position: Position;
     maxPosition: Position;
     direction: ScrollDirection;
     timestamp: float;
     deltaSinceLastRender: Vector;
     ignoreNext: boolean;
+    lastInput: Timestamp;
+    resetTimeoutId: integer;
   };
 
   padding: Padding;
@@ -91,6 +97,8 @@ export class VirtualContainer {
   renderedRows: Map<integer, RowEntry>;
 
   renderNode: (row: number, column: number, node: HTMLElement) => void;
+  removeNode: ((row: number, column: number, node: HTMLElement) => void) | undefined;
+  finishRender: (() => void) | undefined;
 
   tasks: SwapArray<Function>;
   tasksScheduled: boolean;
@@ -124,13 +132,15 @@ export class VirtualContainer {
     };
 
     this.scroll = {
-      behavior: options.behavior ?? WheelBehavior.NATIVE,
+      wheelBehavior: options.wheelBehavior ?? WheelBehavior.NATIVE,
       position: Position.create(0, 0),
       maxPosition: Position.create(0, 0),
       direction: ScrollDirection.NONE,
       timestamp: NaN,
       deltaSinceLastRender: Vector.create(0, 0),
       ignoreNext: false,
+      lastInput: NaN,
+      resetTimeoutId: 0,
     };
 
     this.padding = { ...Padding.DEFAULT };
@@ -139,6 +149,8 @@ export class VirtualContainer {
     this.renderedRows = new Map();
 
     this.renderNode = options.renderNode;
+    this.removeNode = options.removeNode;
+    this.finishRender = options.finishRender;
 
     this.tasks = new SwapArray();
     this.tasksScheduled = false;
@@ -151,12 +163,13 @@ export class VirtualContainer {
     this.attachEventHandlers();
 
     this.writeDimensions();
-    this.writeNodes();
+
+    this.render();
   }
 
   attachEventHandlers() {
     this.rootNode.addEventListener('scroll', this.onScroll);
-    if (this.scroll.behavior === WheelBehavior.CONTROLLED) {
+    if (this.scroll.wheelBehavior === WheelBehavior.CONTROLLED) {
       this.rootNode.addEventListener('wheel', this.onWheel);
     }
     this.disposables.add(() => {
@@ -164,6 +177,8 @@ export class VirtualContainer {
       this.rootNode.removeEventListener('scroll', this.onScroll);
     });
   }
+
+  scheduleResetDirection() {}
 
   readDimensions() {
     const { options, layout, dimensions, scroll } = this;
@@ -204,11 +219,36 @@ export class VirtualContainer {
     this.fillerNode.style.height = Math.max(content.height, root.height) + 'px';
   }
 
-  onWheel = (event: WheelEvent) => {
-    const { scroll } = this;
-    // scroll.behavior === ScrollBehavior.CONTROLLED
+  receiveInput(event: Event) {
+    this.scroll.lastInput = event.timeStamp;
+    // Instead of calling set/cancel on the timeout in each wheel/scroll event, we set
+    // it once and either ignore or restart it if necessary when it fires.
+    if (this.scroll.resetTimeoutId === 0) {
+      this.scroll.resetTimeoutId = setTimeout(this.resetTimeout, SCROLL_DIRECTION_RESET);
+    }
+  }
 
+  resetTimeout = () => {
+    const now = performance.now();
+    const elapsed = now - this.scroll.lastInput;
+    const remaining = SCROLL_DIRECTION_RESET - elapsed;
+    if (remaining > 0) {
+      this.scroll.resetTimeoutId = setTimeout(this.resetTimeout, remaining);
+    } else {
+      this.scroll.resetTimeoutId = 0;
+      this.scroll.direction = ScrollDirection.NONE;
+      this.padding = Padding.forDirection(this.scroll.direction, 800, false);
+      this.render();
+    }
+  };
+
+  onWheel = (event: WheelEvent) => {
+    // Only called for ScrollBehavior.CONTROLLED
+
+    const { scroll } = this;
     const { deltaSinceLastRender } = scroll;
+
+    scroll.lastInput = event.timeStamp;
 
     deltaSinceLastRender.x += event.deltaX;
     deltaSinceLastRender.y += event.deltaY;
@@ -229,10 +269,14 @@ export class VirtualContainer {
     this.render();
     this.rootNode.scrollLeft = scroll.position.x;
     this.rootNode.scrollTop = scroll.position.y;
+
+    this.receiveInput(event);
   };
 
   onScroll = (event: Event) => {
     const { scroll } = this;
+
+    scroll.lastInput = event.timeStamp;
 
     if (scroll.ignoreNext) {
       scroll.ignoreNext = false;
@@ -259,6 +303,7 @@ export class VirtualContainer {
     this.padding = Padding.forDirection(scroll.direction, 800, false);
 
     this.render();
+    this.receiveInput(event);
   };
 
   render = () => {
@@ -266,6 +311,8 @@ export class VirtualContainer {
     scroll.deltaSinceLastRender.x = 0;
     scroll.deltaSinceLastRender.y = 0;
     this.writeNodes();
+    this.removeNodes();
+    this.finishRender?.();
   };
 
   writeNodes() {
@@ -357,7 +404,6 @@ export class VirtualContainer {
     // );
 
     this.context = nextContext;
-    this.scheduleWork(this.removeNodes);
   }
 
   removeNodes = () => {
@@ -375,6 +421,7 @@ export class VirtualContainer {
           if (!isInInterval(columnIndex, context.columnFirst, context.columnLast)) {
             rowEntry.node.removeChild(columnEntry.node);
             rowEntry.columns.delete(columnIndex);
+            this.removeNode?.(rowIndex, columnIndex, columnEntry.node);
             count++;
           }
         }
@@ -421,6 +468,9 @@ export class VirtualContainer {
   }
 
   cleanup = () => {
+    if (this.scroll.resetTimeoutId) {
+      clearTimeout(this.scroll.resetTimeoutId);
+    }
     this.disposables.forEach((f) => f());
     this.rootNode.innerHTML = '';
   };

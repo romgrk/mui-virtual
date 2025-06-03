@@ -2,6 +2,7 @@ import { abs } from './math';
 
 export type float = number;
 export type integer = number;
+export type Timestamp = float;
 
 export type Position = { x: float; y: float };
 export namespace Position {
